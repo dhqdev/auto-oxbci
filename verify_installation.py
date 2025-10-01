@@ -41,15 +41,23 @@ def verify_dependencies():
     """Verifica dependências instaladas"""
     print("\n📦 Verificando dependências...")
     
-    dependencies = {
+    # Dependências obrigatórias
+    required_dependencies = {
         'selenium': 'Selenium',
         'webdriver_manager': 'WebDriver Manager',
         'tkinter': 'Tkinter (GUI)'
     }
     
+    # Dependências opcionais (para funcionalidades específicas)
+    optional_dependencies = {
+        'requests': 'Requests (HTTP)',
+        'bs4': 'BeautifulSoup4 (HTML parsing)'
+    }
+    
     all_ok = True
     
-    for module, name in dependencies.items():
+    # Verifica dependências obrigatórias
+    for module, name in required_dependencies.items():
         try:
             if module == 'tkinter':
                 import tkinter
@@ -59,6 +67,15 @@ def verify_dependencies():
         except ImportError:
             print_check(name, False)
             all_ok = False
+    
+    # Verifica dependências opcionais (não falha se ausentes)
+    for module, name in optional_dependencies.items():
+        try:
+            __import__(module)
+            print_check(f"{name} (opcional)", True)
+        except ImportError:
+            print_check(f"{name} (opcional) - ausente", False)
+            print(f"   ℹ️  {name} não é obrigatório para funcionamento básico")
     
     return all_ok
 
@@ -154,7 +171,7 @@ def verify_documentation():
     docs = {
         'README.md': 'README principal',
         'QUICKSTART.md': 'Guia rápido',
-        'README_V4.md': 'Guia completo v4.0',
+        'README_USER_GUIDE.md': 'Guia completo do usuário',
         'TECHNICAL_DOCS.md': 'Documentação técnica',
         'SUMMARY.md': 'Resumo executivo'
     }
@@ -171,10 +188,10 @@ def verify_documentation():
 
 def main():
     """Função principal"""
-    print_header("VERIFICAÇÃO DE INSTALAÇÃO - v4.0")
+    print_header("VERIFICAÇÃO DE INSTALAÇÃO - v1.0")
     
     print("\n📋 Este script verifica se tudo está instalado corretamente")
-    print("   para o Sistema de Automação Servopa + Todoist v4.0")
+    print("   para o Sistema de Automação Servopa + Todoist")
     
     results = {}
     
@@ -205,7 +222,7 @@ def main():
         print("   3. Clique em 'Iniciar' na aba Automação")
         print("\n📚 Documentação:")
         print("   • QUICKSTART.md - Guia rápido")
-        print("   • README_V4.md - Guia completo")
+        print("   • README_USER_GUIDE.md - Guia completo")
         return 0
     else:
         print("❌ Alguns problemas encontrados!")

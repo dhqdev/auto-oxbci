@@ -20,6 +20,7 @@ class ModernAutomationGUI:
         # Estado da aplicação
         self.automation_running = False
         self.credentials_file = 'credentials.json'
+        self.driver = None  # Armazena referência do driver
         
         # Variáveis para credenciais
         self.servopa_login_var = tk.StringVar()
@@ -50,6 +51,7 @@ class ModernAutomationGUI:
         
         self.create_automation_tab()
         self.create_credentials_tab()
+        self.create_history_tab()
         
     def create_automation_tab(self):
         """Aba de automação"""
@@ -193,6 +195,232 @@ class ModernAutomationGUI:
         except Exception as e:
             self.creds_status.config(text=f"❌ Erro: {str(e)[:30]}", fg='red')
     
+    def create_history_tab(self):
+        """Aba de histórico - Já feito do dia 8"""
+        tab_frame = tk.Frame(self.notebook)
+        self.notebook.add(tab_frame, text='📊 Já feito do dia 8')
+        
+        # Arquivo para salvar histórico
+        self.history_file = 'history_dia8.json'
+        self.history_data = []
+        
+        # Header com informações
+        header_frame = tk.Frame(tab_frame, bg='#e9ecef', height=60)
+        header_frame.pack(fill='x', padx=10, pady=5)
+        header_frame.pack_propagate(False)
+        
+        tk.Label(header_frame, text="📊 Registro de Lances Processados",
+                font=('Arial', 14, 'bold'), bg='#e9ecef').pack(pady=5)
+        
+        info_container = tk.Frame(header_frame, bg='#e9ecef')
+        info_container.pack(fill='x', padx=10)
+        
+        self.history_stats_label = tk.Label(info_container,
+                                            text="Total: 0 | ✅ Sucesso: 0 | ❌ Erro: 0",
+                                            font=('Arial', 10), bg='#e9ecef')
+        self.history_stats_label.pack(side='left')
+        
+        # Botões de ação
+        button_container = tk.Frame(tab_frame)
+        button_container.pack(fill='x', padx=10, pady=5)
+        
+        tk.Button(button_container, text="🔄 Atualizar", font=('Arial', 9, 'bold'),
+                 bg='#007bff', fg='white', command=self.refresh_history, padx=15).pack(side='left', padx=3)
+        
+        tk.Button(button_container, text="📥 Exportar Excel", font=('Arial', 9, 'bold'),
+                 bg='#28a745', fg='white', command=self.export_to_excel, padx=15).pack(side='left', padx=3)
+        
+        tk.Button(button_container, text="🗑️ Limpar Histórico", font=('Arial', 9, 'bold'),
+                 bg='#dc3545', fg='white', command=self.clear_history, padx=15).pack(side='left', padx=3)
+        
+        # Frame para a tabela com scrollbars
+        table_frame = tk.Frame(tab_frame)
+        table_frame.pack(fill='both', expand=True, padx=10, pady=5)
+        
+        # Scrollbars
+        vsb = ttk.Scrollbar(table_frame, orient="vertical")
+        vsb.pack(side='right', fill='y')
+        
+        hsb = ttk.Scrollbar(table_frame, orient="horizontal")
+        hsb.pack(side='bottom', fill='x')
+        
+        # Treeview (Tabela)
+        columns = ('hora', 'grupo', 'cota', 'nome', 'valor_lance', 'status', 'observacao')
+        self.history_tree = ttk.Treeview(table_frame, columns=columns, show='headings',
+                                        yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        
+        # Configura scrollbars
+        vsb.config(command=self.history_tree.yview)
+        hsb.config(command=self.history_tree.xview)
+        
+        # Define cabeçalhos e larguras
+        headers = {
+            'hora': ('Hora', 80),
+            'grupo': ('Grupo', 80),
+            'cota': ('Cota', 80),
+            'nome': ('Nome Cliente', 200),
+            'valor_lance': ('Valor Lance', 100),
+            'status': ('Status', 100),
+            'observacao': ('Observação', 250)
+        }
+        
+        for col, (header, width) in headers.items():
+            self.history_tree.heading(col, text=header, command=lambda c=col: self.sort_history_column(c))
+            self.history_tree.column(col, width=width, anchor='center' if col != 'nome' and col != 'observacao' else 'w')
+        
+        self.history_tree.pack(fill='both', expand=True)
+        
+        # Estilo zebrado e por status
+        self.history_tree.tag_configure('success', background='#d4edda')  # Verde claro para sucesso
+        self.history_tree.tag_configure('error', background='#f8d7da')    # Vermelho claro para erro
+        self.history_tree.tag_configure('stopped', background='#fff3cd')  # Laranja claro para parado
+        self.history_tree.tag_configure('odd', background='#f8f9fa')
+        self.history_tree.tag_configure('even', background='white')
+        
+        # Carrega histórico existente
+        self.load_history()
+    
+    def load_history(self):
+        """Carrega histórico do arquivo JSON"""
+        try:
+            if os.path.exists(self.history_file):
+                with open(self.history_file, 'r', encoding='utf-8') as f:
+                    self.history_data = json.load(f)
+                print(f"✅ Histórico carregado: {len(self.history_data)} registros")
+            else:
+                self.history_data = []
+                print(f"⚠️ Arquivo de histórico não existe: {self.history_file}")
+            
+            self.refresh_history()
+        except Exception as e:
+            print(f"❌ Erro ao carregar histórico: {e}")
+            messagebox.showerror("Erro", f"Erro ao carregar histórico: {e}")
+            self.history_data = []
+    
+    def save_history(self):
+        """Salva histórico no arquivo JSON"""
+        try:
+            with open(self.history_file, 'w', encoding='utf-8') as f:
+                json.dump(self.history_data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            print(f"Erro ao salvar histórico: {e}")
+    
+    def add_history_entry(self, grupo, cota, nome, valor_lance, status, observacao=""):
+        """Adiciona entrada ao histórico"""
+        entry = {
+            'hora': datetime.now().strftime('%H:%M:%S'),
+            'data': datetime.now().strftime('%Y-%m-%d'),
+            'grupo': str(grupo),
+            'cota': str(cota),
+            'nome': nome,
+            'valor_lance': valor_lance,
+            'status': status,
+            'observacao': observacao
+        }
+        
+        self.history_data.append(entry)
+        self.save_history()
+        
+        # Atualiza a tabela na interface (thread-safe)
+        self.root.after(0, self.refresh_history)
+    
+    def refresh_history(self):
+        """Atualiza a exibição da tabela de histórico"""
+        try:
+            # Limpa tabela
+            for item in self.history_tree.get_children():
+                self.history_tree.delete(item)
+            
+            # Adiciona dados
+            success_count = 0
+            error_count = 0
+            stopped_count = 0
+            
+            print(f"📊 Atualizando histórico com {len(self.history_data)} registros...")
+            
+            for idx, entry in enumerate(reversed(self.history_data)):  # Mais recentes primeiro
+                hora = entry.get('hora', '')
+                grupo = entry.get('grupo', '')
+                cota = entry.get('cota', '')
+                nome = entry.get('nome', '')
+                valor_lance = entry.get('valor_lance', '')
+                status = entry.get('status', '')
+                observacao = entry.get('observacao', '')
+                
+                # Determina cor baseado no status
+                if '⏹️' in status or 'parado' in status.lower():
+                    stopped_count += 1
+                    tag = 'stopped'  # Laranja para parado
+                elif 'sucesso' in status.lower() or '✅' in status:
+                    success_count += 1
+                    tag = 'success'  # Verde para sucesso
+                elif 'erro' in status.lower() or '❌' in status or 'falha' in status.lower():
+                    error_count += 1
+                    tag = 'error'  # Vermelho para erro
+                else:
+                    tag = 'odd' if idx % 2 else 'even'
+                
+                self.history_tree.insert('', 'end', values=(hora, grupo, cota, nome, valor_lance, status, observacao),
+                                        tags=(tag,))
+            
+            # Atualiza estatísticas
+            total = len(self.history_data)
+            stats_text = f"Total: {total} | ✅ Sucesso: {success_count}"
+            if stopped_count > 0:
+                stats_text += f" | ⏹️ Parado: {stopped_count}"
+            stats_text += f" | ❌ Erro: {error_count}"
+            
+            self.history_stats_label.config(text=stats_text)
+            print(f"✅ Histórico atualizado: {stats_text}")
+            
+        except Exception as e:
+            print(f"❌ Erro ao atualizar histórico: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def sort_history_column(self, col):
+        """Ordena tabela por coluna"""
+        items = [(self.history_tree.set(item, col), item) for item in self.history_tree.get_children('')]
+        items.sort()
+        
+        for index, (val, item) in enumerate(items):
+            self.history_tree.move(item, '', index)
+    
+    def export_to_excel(self):
+        """Exporta histórico para Excel/CSV"""
+        try:
+            import csv
+            from tkinter import filedialog
+            
+            if not self.history_data:
+                messagebox.showwarning("Aviso", "Não há dados para exportar!")
+                return
+            
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".csv",
+                filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+                initialfile=f"historico_dia8_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            )
+            
+            if filename:
+                with open(filename, 'w', newline='', encoding='utf-8-sig') as f:
+                    writer = csv.DictWriter(f, fieldnames=['data', 'hora', 'grupo', 'cota', 'nome', 
+                                                           'valor_lance', 'status', 'observacao'])
+                    writer.writeheader()
+                    writer.writerows(self.history_data)
+                
+                messagebox.showinfo("Sucesso", f"Dados exportados para:\n{filename}")
+        except Exception as e:
+            messagebox.showerror("Erro", f"Erro ao exportar: {e}")
+    
+    def clear_history(self):
+        """Limpa todo o histórico"""
+        if messagebox.askyesno("Confirmar", "Deseja realmente limpar TODO o histórico?\n\nEsta ação não pode ser desfeita!"):
+            self.history_data = []
+            self.save_history()
+            self.refresh_history()
+            messagebox.showinfo("Sucesso", "Histórico limpo com sucesso!")
+    
     def setup_queue_processor(self):
         """Processa mensagens da queue"""
         def process():
@@ -249,12 +477,24 @@ class ModernAutomationGUI:
         self.automation_thread.start()
         
     def stop_automation(self):
-        """Para automação"""
+        """Para automação e fecha navegador"""
         self.automation_running = False
         self.start_button.config(state='normal')
         self.stop_button.config(state='disabled')
         self.general_status.config(text="⏹️ Parando...", fg='red')
         self.add_log_message("⏹️ Solicitação de parada recebida")
+        
+        # Fecha o navegador se existir
+        if self.driver:
+            try:
+                self.add_log_message("🔒 Fechando navegador...")
+                self.driver.quit()
+                self.driver = None
+                self.add_log_message("✅ Navegador fechado com sucesso")
+            except Exception as e:
+                self.add_log_message(f"⚠️ Erro ao fechar navegador: {e}")
+        
+        self.general_status.config(text="⏹️ Parado", fg='gray')
         
     def run_automation(self):
         """Executa automação completa com ciclo entre sites"""
@@ -302,6 +542,7 @@ class ModernAutomationGUI:
                 return
             
             driver = create_driver()
+            self.driver = driver  # Armazena referência global
             
             try:
                 # ========== ETAPA 1: LOGIN SERVOPA ==========
@@ -423,8 +664,14 @@ class ModernAutomationGUI:
                 self.update_status('cliente', '⏳ Processando')
                 self.update_status('lances', '⏳ Processando')
                 
-                # Executa ciclo completo
-                stats = executar_ciclo_completo(driver, board_data, self.progress_callback)
+                # Executa ciclo completo com callback de histórico e função de verificação
+                stats = executar_ciclo_completo(
+                    driver, 
+                    board_data, 
+                    self.progress_callback, 
+                    self.add_history_entry,
+                    lambda: self.automation_running  # Função que verifica se deve continuar
+                )
                 
                 if stats:
                     self.update_status('cliente', '✅ OK')
@@ -446,21 +693,26 @@ class ModernAutomationGUI:
                     self.progress_callback("   (Feche manualmente quando terminar)")
                 else:
                     self.progress_callback("⏹️ Automação interrompida")
-                    if driver:
+                    if self.driver:
                         try:
-                            driver.quit()
-                        except:
-                            pass
+                            self.progress_callback("🔒 Fechando navegador...")
+                            self.driver.quit()
+                            self.driver = None
+                            self.progress_callback("✅ Navegador fechado")
+                        except Exception as e:
+                            self.progress_callback(f"⚠️ Aviso ao fechar navegador: {e}")
                 
         except Exception as e:
             self.progress_callback(f"❌ Erro crítico: {e}")
             self.general_status.config(text="❌ Erro", fg='red')
-            if driver:
+            if self.driver:
                 try:
-                    # Mantém aberto para debug
-                    self.progress_callback("🔒 Navegador mantido aberto para análise do erro")
-                except:
-                    pass
+                    self.progress_callback("🔒 Fechando navegador devido ao erro...")
+                    self.driver.quit()
+                    self.driver = None
+                    self.progress_callback("✅ Navegador fechado")
+                except Exception as cleanup_error:
+                    self.progress_callback(f"⚠️ Aviso ao fechar navegador: {cleanup_error}")
         finally:
             self.automation_running = False
             self.start_button.config(state='normal')

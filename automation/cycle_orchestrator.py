@@ -34,7 +34,7 @@ def switch_to_window_with_url(driver, url_part, progress_callback=None):
         return False
 
 
-def executar_ciclo_completo(driver, board_data, progress_callback=None):
+def executar_ciclo_completo(driver, board_data, progress_callback=None, history_callback=None, should_continue=None):
     """
     Executa o ciclo completo coluna por coluna, linha por linha
     
@@ -45,28 +45,33 @@ def executar_ciclo_completo(driver, board_data, progress_callback=None):
           b. Busca grupo
           c. Seleciona cota
           d. Navega para lances
-          e. Executa lance
+          e. Executa lance (com verificação de popup)
           f. Muda para aba do Todoist
-          g. Marca checkbox como concluído
+          g. Marca checkbox como concluído (individual)
           h. Volta para aba do Servopa
-       3. Próxima coluna
+          i. Registra no histórico
+       3. Ao terminar a coluna: marca TODOS os checkboxes da coluna
+       4. Próxima coluna
     
     Args:
         driver: Instância do WebDriver com ambas as abas abertas
         board_data: Dados extraídos do board (retorno de extract_complete_board)
         progress_callback: Função para atualizar progresso na UI
+        history_callback: Função para adicionar entrada ao histórico (grupo, cota, nome, valor, status, obs)
+        should_continue: Função que retorna True se deve continuar, False se deve parar
         
     Returns:
         dict: Estatísticas da execução
     """
     from automation.servopa_lances import processar_lance_completo
-    from utils.todoist_board_extractor import mark_task_completed
+    from utils.todoist_board_extractor import mark_task_completed, mark_all_section_tasks_completed
     
     stats = {
         'total_sections': len(board_data['sections']),
         'total_tasks': sum(len(s['tasks']) for s in board_data['sections']),
         'completed': 0,
         'failed': 0,
+        'skipped': 0,
         'results': []
     }
     
@@ -78,6 +83,12 @@ def executar_ciclo_completo(driver, board_data, progress_callback=None):
     
     # Percorre cada coluna (seção)
     for section_index, section in enumerate(board_data['sections'], 1):
+        # Verifica se deve continuar
+        if should_continue and not should_continue():
+            if progress_callback:
+                progress_callback("⏹️ Automação interrompida pelo usuário")
+            return stats
+        
         grupo = section['grupo']
         section_title = section['title']
         total_tasks_in_section = len(section['tasks'])
@@ -92,6 +103,12 @@ def executar_ciclo_completo(driver, board_data, progress_callback=None):
         
         # Percorre cada linha (tarefa) nesta coluna
         for task_index, task in enumerate(section['tasks'], 1):
+            # Verifica se deve continuar
+            if should_continue and not should_continue():
+                if progress_callback:
+                    progress_callback("⏹️ Automação interrompida pelo usuário")
+                return stats
+            
             cota = task['cota']
             nome = task['nome']
             checkbox = task['checkbox_element']
@@ -113,6 +130,18 @@ def executar_ciclo_completo(driver, board_data, progress_callback=None):
             }
             
             try:
+                # ========== VERIFICAÇÃO: CONTINUAR? ==========
+                if should_continue and not should_continue():
+                    # Automação foi parada pelo usuário DURANTE o processamento deste item
+                    if history_callback:
+                        try:
+                            history_callback(grupo, cota, nome, "N/A", "⏹️ Parado", "Automação interrompida pelo usuário")
+                        except:
+                            pass
+                    if progress_callback:
+                        progress_callback("⏹️ Automação interrompida pelo usuário durante processamento")
+                    return stats
+                
                 # ========== PARTE 1: SERVOPA ==========
                 if progress_callback:
                     progress_callback("🌐 [SERVOPA] Mudando para aba do Servopa...")
@@ -121,6 +150,17 @@ def executar_ciclo_completo(driver, board_data, progress_callback=None):
                     raise Exception("Não foi possível mudar para aba do Servopa")
                 
                 time.sleep(1)
+                
+                # ========== VERIFICAÇÃO: CONTINUAR? ==========
+                if should_continue and not should_continue():
+                    if history_callback:
+                        try:
+                            history_callback(grupo, cota, nome, "N/A", "⏹️ Parado", "Automação interrompida pelo usuário")
+                        except:
+                            pass
+                    if progress_callback:
+                        progress_callback("⏹️ Automação interrompida pelo usuário durante processamento")
+                    return stats
                 
                 # Processa lance completo no Servopa
                 if progress_callback:
@@ -131,8 +171,24 @@ def executar_ciclo_completo(driver, board_data, progress_callback=None):
                 if not lance_result['success']:
                     raise Exception(f"Falha no processamento do lance: {lance_result.get('error', 'Desconhecido')}")
                 
-                if progress_callback:
-                    progress_callback(f"✅ [SERVOPA] Lance registrado com sucesso!")
+                # Verifica se lance já existia
+                if lance_result.get('already_exists', False):
+                    if progress_callback:
+                        progress_callback(f"✅ [SERVOPA] {lance_result.get('lance_message', 'Lance já registrado')}")
+                else:
+                    if progress_callback:
+                        progress_callback(f"✅ [SERVOPA] Lance registrado com sucesso!")
+                
+                # ========== VERIFICAÇÃO: CONTINUAR? ==========
+                if should_continue and not should_continue():
+                    if history_callback:
+                        try:
+                            history_callback(grupo, cota, nome, "N/A", "⏹️ Parado", "Automação interrompida pelo usuário")
+                        except:
+                            pass
+                    if progress_callback:
+                        progress_callback("⏹️ Automação interrompida pelo usuário durante processamento")
+                    return stats
                 
                 # ========== PARTE 2: TODOIST ==========
                 if progress_callback:
@@ -153,6 +209,22 @@ def executar_ciclo_completo(driver, board_data, progress_callback=None):
                     
                     result['success'] = True
                     stats['completed'] += 1
+                    
+                    # ========== REGISTRA NO HISTÓRICO (SUCESSO) ==========
+                    if history_callback:
+                        try:
+                            valor_lance = lance_result.get('valor_lance', 'N/A')
+                            if lance_result.get('already_exists', False):
+                                observacao = "Lance já existia (protocolo anterior detectado)"
+                                status = "✅ Sucesso (já existia)"
+                            else:
+                                observacao = "Lance registrado com sucesso"
+                                status = "✅ Sucesso"
+                            
+                            history_callback(grupo, cota, nome, f"{valor_lance}%", status, observacao)
+                        except Exception as hist_error:
+                            if progress_callback:
+                                progress_callback(f"⚠️ Aviso: Não foi possível registrar no histórico: {hist_error}")
                 else:
                     raise Exception("Falha ao marcar checkbox no Todoist")
                 
@@ -171,6 +243,14 @@ def executar_ciclo_completo(driver, board_data, progress_callback=None):
                 stats['failed'] += 1
                 result['error'] = str(e)
                 
+                # ========== REGISTRA NO HISTÓRICO (ERRO) ==========
+                if history_callback:
+                    try:
+                        history_callback(grupo, cota, nome, "N/A", "❌ Erro", str(e)[:200])
+                    except Exception as hist_error:
+                        if progress_callback:
+                            progress_callback(f"⚠️ Aviso: Não foi possível registrar erro no histórico: {hist_error}")
+                
                 if progress_callback:
                     progress_callback(f"❌ Erro na tarefa {task_index}: {e}")
                     progress_callback(f"⚠️ Tentando continuar com próxima tarefa...")
@@ -183,10 +263,36 @@ def executar_ciclo_completo(driver, board_data, progress_callback=None):
             
             stats['results'].append(result)
         
+        # ========== FIM DA COLUNA: MARCA TODOS OS CHECKBOXES ==========
+        if progress_callback:
+            progress_callback("")
+            progress_callback("=" * 60)
+            progress_callback(f"📋 FINALIZANDO COLUNA: {section_title}")
+            progress_callback("=" * 60)
+        
+        # Muda para Todoist para marcar todos os checkboxes
+        try:
+            if switch_to_window_with_url(driver, "todoist", progress_callback):
+                time.sleep(2)
+                
+                # Marca todos os checkboxes da coluna
+                marked_count = mark_all_section_tasks_completed(driver, section_title, progress_callback)
+                
+                if progress_callback:
+                    progress_callback(f"✅ {marked_count} checkboxes garantidos na coluna '{section_title}'")
+            
+            # Volta para Servopa para próxima coluna
+            switch_to_window_with_url(driver, "servopa", progress_callback)
+            time.sleep(1)
+            
+        except Exception as final_mark_error:
+            if progress_callback:
+                progress_callback(f"⚠️ Erro ao marcar checkboxes finais: {final_mark_error}")
+        
         # Fim da coluna
         if progress_callback:
             progress_callback("")
-            progress_callback(f"✅ Coluna '{section_title}' concluída!")
+            progress_callback(f"✅ Coluna '{section_title}' TOTALMENTE concluída!")
             progress_callback(f"📊 Total: {stats['completed']} sucesso, {stats['failed']} falhas")
     
     # ========== RELATÓRIO FINAL ==========
@@ -195,9 +301,12 @@ def executar_ciclo_completo(driver, board_data, progress_callback=None):
         progress_callback("=" * 60)
         progress_callback("🎉 CICLO COMPLETO FINALIZADO!")
         progress_callback("=" * 60)
+        if stats['skipped'] > 0:
+            progress_callback(f"⏭️ Tarefas puladas (continuação): {stats['skipped']}")
         progress_callback(f"✅ Tarefas concluídas: {stats['completed']}/{stats['total_tasks']}")
         progress_callback(f"❌ Tarefas com falha: {stats['failed']}/{stats['total_tasks']}")
-        progress_callback(f"📊 Taxa de sucesso: {(stats['completed']/stats['total_tasks']*100):.1f}%")
+        if stats['completed'] + stats['failed'] > 0:
+            progress_callback(f"📊 Taxa de sucesso: {(stats['completed']/(stats['completed']+stats['failed'])*100):.1f}%")
         progress_callback("=" * 60)
     
     return stats
